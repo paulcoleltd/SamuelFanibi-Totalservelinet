@@ -80,7 +80,7 @@ stages:
                 - task: AzureWebApp@1
                   displayName: 'Deploy Azure Web App: totalserve-client2-uat'
                   inputs:
-                    azureSubscription: ' Azure subscription 2'
+                    azureSubscription: 'Azure subscription 2'
                     appType: 'webAppLinux'
                     appName: '$(uatAppService)'
                     resourceGroupName: '$(uatResourceGroup)'
