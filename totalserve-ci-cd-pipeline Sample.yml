@@ -1,0 +1,150 @@
+
+# Azure DevOps Pipeline for TotalServe.client
+# This pipeline builds and deploys the Node.js web application to Azure App Service.
+# Triggers
+# --------------------------------------------------------------------------------
+# This section defines what events will automatically start the pipeline.
+trigger:
+  # Trigger the pipeline on pushes to these branches.
+  # This is a Continuous Integration (CI) trigger.
+  # - 'main': triggers deployment pipeline after PR merge
+  # - 'BranchByPaulCole': triggers build & test on feature branch pushes
+  branches:
+    include:
+      - main
+      - BranchByPaulCole
+pr:
+  # Trigger the pipeline on pull requests targeting the 'main' branch.
+  # This ensures code quality checks (build, lint, test) run before merging.
+  branches:
+    include:
+      - main
+    # --------------------------------------------------------------------------------
+# Variables
+# --------------------------------------------------------------------------------
+# Define variables that can be reused throughout the pipeline.
+
+variables:
+  # Agent VM image to use for the pipeline.
+  vmImage: 'ubuntu-latest'
+  # Node.js version to use for building the application.
+  nodeVersion: '18.x'
+  # Name of the Azure App Service for the application.
+  appName: 'totalserve-client'
+  # Azure resource group for the development environment.
+  devResourceGroup: 'TotalServe-Dev-RG'
+  # Azure App Service name for the development slot.
+  devAppService: 'totalserve-client-dev'
+  # Azure resource group for the production environment.
+  prodResourceGroup: 'TotalServe-Prod-RG'
+  # Azure App Service name for the production slot.
+  prodAppService: 'totalserve-client-prod'
+
+# --------------------------------------------------------------------------------
+# Stages
+# --------------------------------------------------------------------------------
+# A pipeline consists of one or more stages. Stages are logical divisions
+# in the pipeline, typically representing major phases like Build, Test, Deploy.
+
+stages:
+  # ----------------------------------------------------------------------------
+  # Stage 1: Build
+  # This stage is responsible for building and testing the Node.js application.
+  # ----------------------------------------------------------------------------
+  - stage: Build
+    displayName: 'Build Application'
+    jobs:
+      - job: BuildJob
+        displayName: 'Build and Test'
+        pool:
+          vmImage: $(vmImage)
+
+        steps:
+          - task: NodeTool@0
+            displayName: 'Use Node.js $(nodeVersion)'
+            inputs:
+              versionSpec: $(nodeVersion)
+
+          - script: |
+              npm install
+              npm run build
+              npm test
+              displayName: 'Install dependencies, Build, and Test Paul'
+
+          - task: ArchiveFiles@2
+            displayName: 'Archive Application Files'
+            inputs:
+              rootFolderOrFile: '$(System.DefaultWorkingDirectory)'
+              includeRootFolder: false
+              archiveType: 'zip'
+              archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip'
+              replaceExistingArchive: true
+
+          - publish: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
+            artifact: drop
+            displayName: 'Publish Build Artifact'
+
+  # ----------------------------------------------------------------------------
+  # Stage 2: Deploy to Development
+  # This stage deploys the built application to the development environment.
+  # It depends on the 'Build' stage completing successfully.
+  # ----------------------------------------------------------------------------
+  - stage: DeployDev
+    displayName: 'Deploy to Development'
+    dependsOn: Build
+    # Only deploy to Dev when the build is from 'main' or 'BranchByPaulCole'
+    # Feature branch pushes will build & test but skip deployment to keep environments stable
+    condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.SourceBranch'], 'refs/heads/BranchByPaulCole')))
+    jobs:
+      - deployment: DeployDevJob
+        displayName: 'Deploy to Dev App Service'
+        environment: 'Dev'
+        pool:
+          vmImage: $(vmImage)
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureWebApp@1
+                  displayName: 'Deploy Azure Web App: totalserve-client-dev'
+                  inputs:
+                    azureSubscription: 'Your Azure Subscription Name' # Replace with your Azure service connection name
+                    appType: 'webAppLinux'
+                    appName: '$(devAppService)'
+                    resourceGroupName: '$(devResourceGroup)'
+                    package: '$(Pipeline.Workspace)/drop/$(Build.BuildId).zip'
+                    # Deploy to a specific slot (e.g., 'staging') for dev environment
+                    # slotName: 'staging'
+
+  # ----------------------------------------------------------------------------
+  # Stage 3: Deploy to Production
+  # This stage deploys the built application to the production environment.
+  # It depends on the 'DeployDev' stage completing successfully.
+  # Manual approval can be added here for production deployments.
+  # ----------------------------------------------------------------------------
+  - stage: DeployProd
+    displayName: 'Deploy to Production'
+    dependsOn: DeployDev
+    # Only deploy to Prod from 'main' branch — never directly from feature branches
+    # Manual approval is configured in the 'Prod' environment in Azure DevOps
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeployProdJob
+        displayName: 'Deploy to Prod App Service'
+        environment: 'Prod'
+        pool:
+          vmImage: $(vmImage)
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureWebApp@1
+                  displayName: 'Deploy Azure Web App: totalserve-client-prod'
+                  inputs:
+                    azureSubscription: 'Your Azure Subscription Name' # Replace with your Azure service connection name
+                    appType: 'webAppLinux'
+                    appName: '$(prodAppService)'
+                    resourceGroupName: '$(prodResourceGroup)'
+                    package: '$(Pipeline.Workspace)/drop/$(Build.BuildId).zip'
+                    # For production, deploy directly to the main slot or a production slot
+                    # slotName: 'production'
